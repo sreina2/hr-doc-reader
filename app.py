@@ -1,3 +1,4 @@
+import hmac
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,48 @@ from resume_render import HEADER_MODE_EVERY_PAGE, HEADER_MODE_LABELS, sections_t
 
 load_dotenv()
 
+# Streamlit Community Cloud provides secrets via st.secrets, not as real
+# environment variables - bridge it here so the Anthropic SDK (which reads
+# ANTHROPIC_API_KEY from os.environ) finds it the same way locally and when
+# deployed, without changing how the key is configured in either place.
+if "ANTHROPIC_API_KEY" not in os.environ:
+    try:
+        if "ANTHROPIC_API_KEY" in st.secrets:
+            os.environ["ANTHROPIC_API_KEY"] = st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
+
 st.set_page_config(page_title="HR Document Reader", page_icon="🔒")
+
+if "APP_PASSWORD" not in os.environ:
+    try:
+        if "APP_PASSWORD" in st.secrets:
+            os.environ["APP_PASSWORD"] = st.secrets["APP_PASSWORD"]
+    except Exception:
+        pass
+
+
+def _require_password() -> None:
+    """Gate the whole app behind a single shared password before anything else
+    runs. The entered value is compared in constant time (avoids a timing
+    side-channel) and is never logged or written to disk - only a boolean
+    "unlocked" flag is kept, in memory, per browser session."""
+    if st.session_state.get("authenticated"):
+        return
+
+    st.title("HR Document Reader")
+    password = st.text_input("Password", type="password")
+    if password:
+        expected = os.environ.get("APP_PASSWORD", "")
+        if expected and hmac.compare_digest(password, expected):
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
+
+
+_require_password()
 
 st.markdown(
     """
