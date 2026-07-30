@@ -47,10 +47,17 @@ LEVEL_1_SYSTEM_PROMPT = """You are formatting a resume/CV/reference document int
 structured sections while redacting direct personal identifiers.
 
 Redact ONLY the following, replacing each occurrence with the exact token shown:
-- Full name of the document's subject -> [REDACTED-NAME]
+- The full name, first name alone, last name alone, or initial-plus-name combination of \
+ANY person mentioned anywhere in the document - the subject, a reference, a manager, a \
+co-author, anyone at all named, with no exceptions (e.g. "Sabah Reina", "Sarah", \
+"Mark R.") -> [REDACTED-NAME]. A person's name used as part of a company's own name (e.g. \
+"Smith & Associates", "Johnson Consulting") is a company name, not a personal name - leave \
+it exactly as written, per the company-name rule below.
 - Email addresses -> [REDACTED-EMAIL]
 - Phone numbers -> [REDACTED-PHONE]
-- Home/mailing addresses -> [REDACTED-ADDRESS]
+- Any home/mailing address, for anyone mentioned (not just the subject) - including a \
+partial fragment on its own, such as a unit/apartment number (e.g. "Apt 2B") -> \
+[REDACTED-ADDRESS]
 - LinkedIn profiles, personal websites, or other personal URLs -> [REDACTED-URL]
 - Any other direct personal identifier (e.g. a personal ID number) -> [REDACTED-ID]
 
@@ -71,10 +78,17 @@ LEVEL_2_SYSTEM_PROMPT = """You are formatting a resume/CV/reference document int
 structured sections while de-identifying the subject as thoroughly as possible.
 
 Redact all of the following, replacing each occurrence with the exact token shown:
-- Full name of the document's subject -> [REDACTED-NAME]
+- The full name, first name alone, last name alone, or initial-plus-name combination of \
+ANY person mentioned anywhere in the document - the subject, a reference, a manager, a \
+co-author, anyone at all named, with no exceptions (e.g. "Sabah Reina", "Sarah", \
+"Mark R.") -> [REDACTED-NAME]. A person's name used as part of a company's own name (e.g. \
+"Smith & Associates", "Johnson Consulting") is a company name, not a personal name - it may \
+stay per the company-name allowance below.
 - Email addresses -> [REDACTED-EMAIL]
 - Phone numbers -> [REDACTED-PHONE]
-- Home/mailing addresses -> [REDACTED-ADDRESS]
+- Any home/mailing address, for anyone mentioned (not just the subject) - including a \
+partial fragment on its own, such as a unit/apartment number (e.g. "Apt 2B") -> \
+[REDACTED-ADDRESS]
 - LinkedIn profiles, personal websites, or other personal URLs -> [REDACTED-URL]
 - Any other direct personal identifier -> [REDACTED-ID]
 - Every non-education date (employment dates, publication dates, any specific year or \
@@ -117,8 +131,12 @@ source document has content for it. Prefix bullet-point lines with "- "."""
 LEVEL_3_SYSTEM_PROMPT = """You are extracting an anonymous work-description profile from a \
 resume/CV/reference document.
 
-Discard entirely: the person's name, all company/organization names, all dates, all \
-personal contact information, education institution names, and publication titles.
+Discard entirely: every person's name mentioned anywhere in the document (the subject, a \
+reference, a manager, a co-author, anyone at all named - including a first name alone, a \
+last name alone, or an initial-plus-name combination, with no exceptions), every home/\
+mailing address or address fragment (including a partial fragment on its own, such as a \
+unit/apartment number), all company/organization names, all dates, all other personal \
+contact information, education institution names, and publication titles.
 
 Keep only descriptions of the actual work performed: tasks, responsibilities, and skills \
 used. Rewrite each one as a standalone, anonymous bullet point that reads naturally without \
@@ -146,20 +164,32 @@ LEVEL_PROMPTS = {
 CONTRACT_LEVEL1_SYSTEM_PROMPT = """You are formatting a contract, agreement, or letter into \
 clean structured sections while redacting all identifying information.
 
-Redact ALL of the following, for every party mentioned (not just one), replacing each \
-occurrence with the exact token shown:
-- Full name of any person or company that is a party to, signatory of, or specifically \
-identified within this document -> [REDACTED-NAME]
-- Every address -> [REDACTED-ADDRESS]
+Redact ALL of the following, with NO exceptions, replacing each occurrence with the exact \
+token shown:
+- The full name, first name alone, last name alone, or initial-plus-name combination of ANY \
+person mentioned anywhere in this document, in any capacity - not only defined Parties or \
+signatories, but also anyone referenced, mentioned in passing, named as an example, a \
+witness, a guarantor, a beneficiary, or in any other role, with no exceptions -> \
+[REDACTED-NAME]
+- The name of ANY company or organization mentioned anywhere in this document, in any \
+capacity - a party, a signatory, an employer named in passing, a counterparty, anyone's \
+current or former employer mentioned as background, or any other company referenced for any \
+reason, with no exceptions - it is NEVER shown plain and NEVER given a label or \
+description in its place, always redacted outright (e.g. "Susquehanna", "Atlas", \
+"Citadel") -> [REDACTED-NAME]
+- Every address, for anyone mentioned - including a partial fragment on its own, such as a \
+unit/apartment number (e.g. "Apt 2B") -> [REDACTED-ADDRESS]
 - Every date (effective dates, signing dates, deadlines, terms of duration) -> [REDACTED-DATE]
 - Signatures or signature blocks -> [REDACTED-NAME]
 - Email addresses -> [REDACTED-EMAIL]
 - Phone numbers -> [REDACTED-PHONE]
 - Case numbers, account numbers, reference numbers, or other identifying numbers -> [REDACTED-ID]
-- Compensation or pay amounts - salary, hourly rate, bonus figures, equity/stock grant \
-amounts, or any dollar figure tied to pay, in any format (e.g. "$85,000/year", "$40/hr", "a \
-signing bonus of $10,000"), including a bonus/commission expressed as a percentage of pay \
-(e.g. "a bonus targeted at 10% of base pay") -> [REDACTED-COMPENSATION]
+- Any amount of money someone is being paid, owed, or granted - salary, hourly rate, bonus, \
+commission, equity/stock grants, severance, or any other payment - in ANY format and ANY \
+currency: numeric ("$85,000/year", "£40,000", "€200,000"), written out in words ("one \
+million dollars", "fifty thousand pounds a year"), abbreviated ("$1M", "$40/hr"), or \
+expressed as a percentage of pay ("a bonus targeted at 10% of base pay") -> \
+[REDACTED-COMPENSATION]
 
 Do NOT redact or alter: the substantive terms, clauses, obligations, or content of the \
 document itself (including non-pay dollar figures like liability caps or fees, which are not \
@@ -179,14 +209,24 @@ content as it appears in the source."""
 CONTRACT_LEVEL2_SYSTEM_PROMPT = """You are extracting a summarized-takeaways profile from a \
 contract, agreement, or letter.
 
-Discard entirely: all party names, dates, addresses, signatures, contact information, and \
-case/account/reference numbers.
+Discard entirely, with NO exceptions: every person's name mentioned anywhere (not only \
+defined Parties - anyone referenced, in any capacity, including a first name alone, a last \
+name alone, or an initial-plus-name combination), every company or organization name \
+mentioned anywhere (a party, a signatory, an employer named in passing, or any other company \
+referenced for any reason - never shown plain and never given a label or description in its \
+place, e.g. "Susquehanna", "Atlas", "Citadel"), every date, every address or address \
+fragment (including a partial fragment on its own, such as a unit/apartment number), \
+signatures, contact information, case/account/reference numbers, and every compensation or \
+payment amount in any format or currency (numeric, written out in words, or abbreviated - \
+e.g. "$85,000", "one million dollars", "$1M").
 
 Write a "Summarized Important Takeaways" section: a brief plain-language summary covering \
 what kind of document this is (e.g. an offer letter, an NDA, a service agreement), its key \
 terms or obligations, and any notable conditions - written the way someone skimming for the \
 gist would want it, not a clause-by-clause breakdown. It must not reintroduce any name, \
-date, address, or other identifying detail that is being discarded.
+company name, date, address, compensation/payment amount, or other identifying detail that \
+is being discarded - if a "key term" would normally include a payment amount, describe it \
+in general terms instead (e.g. "includes a signing bonus" rather than stating the amount).
 
 Return ONLY a JSON object with this exact shape, no other text, no markdown fences:
 {"sections": [{"title": "Summarized Important Takeaways", "lines": ["line 1", "line 2"]}]}"""
@@ -201,19 +241,28 @@ identifying information for redaction, for in-place redaction on the original pa
 be given the text with emails, phone numbers, URLs, and ID numbers already removed.
 
 Find and return the exact original substring for every occurrence of:
-- The full name of every person or company that is a party to, signatory of, or \
-specifically identified within this document (not just one party - all of them)
-- Every address
+- Any person's name - full name, first name alone, last name alone, or an initial-plus-name \
+combination - mentioned anywhere in this document, in any capacity: not only defined \
+Parties or signatories, but also anyone referenced, mentioned in passing, named as an \
+example, a witness, a guarantor, a beneficiary, or in any other role, with no exceptions
+- The name of any company or organization mentioned anywhere in this document, in any \
+capacity - a party, a signatory, an employer named in passing, a counterparty, anyone's \
+current or former employer mentioned as background, or any other company referenced for any \
+reason, with no exceptions (e.g. "Susquehanna", "Atlas", "Citadel")
+- Every address or address fragment, for anyone mentioned - including a partial fragment on \
+its own, such as a unit/apartment number (e.g. "Apt 2B")
 - Every date (effective dates, signing dates, deadlines, terms of duration)
 - Any other identifying number (case numbers, account numbers, reference numbers)
-- Compensation or pay amounts - salary, hourly rate, bonus figures, equity/stock grant \
-amounts, or any dollar figure tied to pay, in any format (e.g. "$85,000/year", "$40/hr", "a \
-signing bonus of $10,000"), including a bonus/commission expressed as a percentage of pay \
-(e.g. "a bonus targeted at 10% of base pay")
+- Any amount of money someone is being paid, owed, or granted - salary, hourly rate, bonus, \
+commission, equity/stock grants, severance, or any other payment - in ANY format and ANY \
+currency: numeric ("$85,000/year", "£40,000", "€200,000"), written out in words ("one \
+million dollars", "fifty thousand pounds a year"), abbreviated ("$1M", "$40/hr"), or \
+expressed as a percentage of pay ("a bonus targeted at 10% of base pay")
 
 Do not flag: generic role/title references (e.g. "the Employer", "the Tenant", "the \
 Parties"), section numbering, non-pay dollar figures (liability caps, fees), or other \
-substantive terms/clauses of the document.
+substantive terms/clauses of the document. Names and company names both go in the "names" \
+field below - there is no separate category for companies, they are redacted the same way.
 
 Return ONLY a JSON object with this exact shape, no other text, no markdown fences:
 {"names": ["exact substring"], "addresses": ["exact substring"], "dates": ["exact substring"], \
@@ -225,18 +274,21 @@ SPAN_IDENTIFICATION_PROMPT = """You are reviewing a resume/CV/reference document
 personal identifiers for redaction. You will be given the text with emails, phone numbers, \
 URLs, and ID numbers already removed.
 
-Find every occurrence of the full name of the document's subject, every home/mailing \
-address, and any other direct personal identifier that isn't already removed. Return them \
-verbatim, exactly as they appear in the text, so they can be located with a plain string \
-match.
+Find every occurrence of any person's name - full name, first name alone, last name alone, \
+or an initial-plus-name combination (e.g. "Sabah Reina", "Sarah", "Mark R.") - with NO \
+exceptions: the document's subject, a reference, a manager, a co-author, anyone at all \
+named. Also find every home/mailing address or address fragment, and any other direct \
+personal identifier that isn't already removed. Return them verbatim, exactly as they \
+appear in the text, so they can be located with a plain string match.
 
 An address means a specific street/mailing address (e.g. "42 Baker Street, London, NW1 \
-6XE"). A bare city and state/country (e.g. "New York, NY") is a location, not a home \
-address - do not flag it, whether it's next to the subject's name or a job entry.
+6XE") or a partial fragment on its own, such as a unit/apartment number (e.g. "Apt 2B"). A \
+bare city and state/country (e.g. "New York, NY") is a location, not a home address - do \
+not flag it, whether it's next to a name or a job entry.
 
-Do not flag: job titles alone, company names, city/state locations on their own, or the \
-names of other people mentioned in the document (e.g. co-authors, references, managers) who \
-are not the document's subject.
+Do not flag: job titles alone, company names on their own (but if a person's name is used \
+as part of a company's own name, e.g. "Smith & Associates", that is a company name, not a \
+personal name - do not flag it either), or city/state locations on their own.
 
 Return ONLY a JSON object with this exact shape, no other text, no markdown fences:
 {"names": ["exact substring"], "addresses": ["exact substring"], "other_ids": ["exact substring"]}
@@ -264,8 +316,14 @@ subject as thoroughly as possible, for in-place redaction on the original page. 
 given the text with emails, phone numbers, URLs, and ID numbers already removed.
 
 Find and return the exact original substring for every occurrence of:
-- The full name of the document's subject
-- Every home/mailing address (a specific street/mailing address, not a bare city/state)
+- Any person's name - full name, first name alone, last name alone, or an initial-plus-name \
+combination (e.g. "Sabah Reina", "Sarah", "Mark R.") - with NO exceptions: the document's \
+subject, a reference, a manager, a co-author, anyone at all named. (A person's name used as \
+part of a company's own name, e.g. "Smith & Associates", is a company name, not a personal \
+name - do not flag it.)
+- Every home/mailing address or address fragment, for anyone mentioned (a specific street/\
+mailing address, or a partial fragment on its own such as a unit/apartment number - not a \
+bare city/state, which is a location handled separately below)
 - Any other direct personal identifier
 - Every non-education date (employment dates, publication dates, any specific year or \
 date range) - do NOT include education/graduation dates here, they belong in \
