@@ -40,21 +40,27 @@ TOKEN_TO_FIELD = {
 }
 
 
-def _drop_nested_spans(spans: list) -> list:
-    """Remove any span whose text is fully contained within a longer span already
-    kept - e.g. a bare last name ("Chen") that's also part of a longer name already
-    flagged ("Mr. Chen"), or a unit number ("Apt 4B") that's also part of a full
-    address already flagged. Without this, both get redacted independently via
-    page.search_for(), producing two overlapping redact_annots at (almost) the same
-    spot and a garbled, doubled-up render - this keeps only the longer, outer span,
-    which already covers the same page region."""
-    ordered = sorted(set(spans), key=lambda s: len(s[0]), reverse=True)
-    kept = []
-    for text, replacement in ordered:
-        if any(text in kept_text for kept_text, _ in kept):
-            continue
-        kept.append((text, replacement))
-    return kept
+def _rect_mostly_covered(rect: "fitz.Rect", covered: list, threshold: float = 0.5) -> bool:
+    """True if `rect` substantially overlaps one of the rects in `covered` - used to
+    tell "this occurrence is the same physical spot as one already redacted" (e.g.
+    "Chen" sitting inside an already-redacted "Mr. Chen") apart from "this text
+    happens to also be a substring of some other span, but is a wholly separate
+    occurrence elsewhere on the page" (e.g. "Uber" standing alone, vs. "Uber" as
+    part of "Uber Technologies, Inc." typed once in a different paragraph).
+    Deliberately geometric, not string-based - the earlier string-containment
+    version of this check dropped every standalone "Uber" in a document just
+    because "Uber Technologies, Inc." was redacted once elsewhere, which is wrong:
+    a shorter piece of text is only "already covered" where it actually,
+    physically overlaps a already-redacted rect, not everywhere that text string
+    occurs."""
+    area = rect.get_area()
+    if area <= 0:
+        return False
+    for c in covered:
+        inter = rect & c
+        if not inter.is_empty and inter.get_area() / area >= threshold:
+            return True
+    return False
 
 
 def _group_wrapped_rects(rects: list) -> list:
@@ -122,8 +128,8 @@ def _draw_fitted_text(page, rect, text: str, fill=(0.82, 0.82, 0.82), right_marg
     height_steps = sorted({rect.height, rect.height * 2, rect.height * 3, max_height})
     height_steps = [h for h in height_steps if h <= max_height] or [max_height]
 
-    for fontsize in (8, 7, 6, 5, 4.5, 4):
-        for height in height_steps:
+    for height in height_steps:
+        for fontsize in (8, 7, 6, 5, 4.5, 4):
             box = fitz.Rect(rect.x0, rect.y0, rect.x0 + max_width, rect.y0 + height)
             page.draw_rect(box, color=None, fill=fill)
             if page.insert_textbox(box, text, fontsize=fontsize, fontname="helv") >= 0:
@@ -200,10 +206,20 @@ def _redact_and_brand(
     counts = RedactionCounts()
     for page in doc:
         deferred = []
+        covered_rects = []
         for span_text, replacement in unique_spans:
             if not span_text.strip():
                 continue
             rects = page.search_for(span_text)
+            if not rects:
+                continue
+            # Drop only the occurrences that physically overlap a rect already
+            # redacted (e.g. "Chen" inside an already-redacted "Mr. Chen") - a
+            # shorter span can still have plenty of its own, separate occurrences
+            # elsewhere on the page (e.g. "Uber" standing alone, apart from
+            # wherever "Uber Technologies, Inc." was redacted), and those must
+            # still be found and redacted here, not skipped.
+            rects = [r for r in rects if not _rect_mostly_covered(r, covered_rects)]
             if not rects:
                 continue
             field = TOKEN_TO_FIELD.get(replacement, "other")
@@ -227,6 +243,7 @@ def _redact_and_brand(
                     for rect in group:
                         page.add_redact_annot(rect, fill=(0.82, 0.82, 0.82))
                     deferred.append((combined, replacement))
+                covered_rects.extend(group)
                 setattr(counts, field, getattr(counts, field) + 1)
         page.apply_redactions()
         for rect, replacement in deferred:
@@ -264,7 +281,7 @@ def redact_pdf_in_place(
     identity_block_texts = find_identity_block(client, pre_redacted, model)
     identity_spans = [(s, "[REDACTED-NAME]") for s in identity_block_texts]
     spans = find_regex_spans(full_text) + entity_spans + identity_spans
-    unique_spans = _drop_nested_spans(spans)
+    unique_spans = sorted(set(spans), key=lambda s: len(s[0]), reverse=True)
 
     return _redact_and_brand(doc, unique_spans, identity_block_texts, header_mode)
 
@@ -291,6 +308,6 @@ def redact_contract_pdf_in_place(
 
     entity_spans = find_contract_spans(client, pre_redacted, model)
     spans = find_regex_spans(full_text) + entity_spans
-    unique_spans = _drop_nested_spans(spans)
+    unique_spans = sorted(set(spans), key=lambda s: len(s[0]), reverse=True)
 
     return _redact_and_brand(doc, unique_spans, [], header_mode)

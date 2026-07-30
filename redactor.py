@@ -563,44 +563,90 @@ def find_regex_spans(text: str) -> list:
     return spans
 
 
+_ENTITY_CALL_ATTEMPTS = 3
+
+
+def _call_entity_json_multi(client, model: str, system_prompt: str, text: str, max_tokens: int) -> list:
+    """Call the model several times independently for the same entity-finding prompt
+    and return every parsed payload. Confirmed empirically: a single call can
+    inconsistently omit an entity it should have found (the same well-known company
+    name was missed in roughly one out of every few otherwise-identical calls - this
+    model doesn't expose a temperature control to reduce that variance, so sampling
+    it out via repetition is the only lever available). Redaction-critical
+    entity-finding must never rely on just one attempt, so every caller unions the
+    results across all of them instead of trusting any single payload alone."""
+    payloads = []
+    last_error = None
+    for _ in range(_ENTITY_CALL_ATTEMPTS):
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": text}],
+        )
+        raw = "".join(
+            block.text for block in response.content if getattr(block, "type", None) == "text"
+        ).strip()
+        try:
+            payloads.append(_require_parsed_json(raw, response.stop_reason))
+        except RuntimeError as exc:
+            last_error = exc
+    if not payloads:
+        raise last_error
+    return payloads
+
+
+def _union_str_field(payloads: list, field: str) -> list:
+    """Union a list-of-strings field across multiple payloads, preserving first-seen
+    order and dropping exact duplicates - so an entity caught by any one of several
+    independent attempts ends up in the final result, not just one caught by all."""
+    seen = set()
+    result = []
+    for payload in payloads:
+        values = payload.get(field, [])
+        if not isinstance(values, list):
+            continue
+        for v in values:
+            if isinstance(v, (str, int, float)) and str(v).strip():
+                key = str(v)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(key)
+    return result
+
+
+def _union_dict_list_field(payloads: list, field: str, key_field: str) -> list:
+    """Like _union_str_field, but for a list-of-object field, keyed by one of each
+    object's own fields (e.g. a generalization's "original" substring, or an
+    education entry's "institution" name) - keeps the first-seen object per key."""
+    seen = set()
+    result = []
+    for payload in payloads:
+        values = payload.get(field, [])
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            key = item.get(key_field)
+            if isinstance(key, str) and key.strip() and key not in seen:
+                seen.add(key)
+                result.append(item)
+    return result
+
+
 def find_identity_block(client, text: str, model: str) -> list:
     """Locate the document's own name + contact block as a deterministic first pass,
     regardless of how it's styled - runs before any level-specific rewriting, at every
     level and every input path, so the identity block can never slip through just
     because a level's main rewrite prompt failed to recognize it."""
-    response = client.messages.create(
-        model=model,
-        max_tokens=1024,
-        system=IDENTITY_BLOCK_PROMPT,
-        messages=[{"role": "user", "content": text}],
-    )
-    raw = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    ).strip()
-    payload = _require_parsed_json(raw, response.stop_reason)
-
-    values = payload.get("identity_block", [])
-    if not isinstance(values, list):
-        return []
-    return [
-        _expand_first_occurrence(text, str(v))
-        for v in values
-        if isinstance(v, (str, int, float)) and str(v).strip()
-    ]
+    payloads = _call_entity_json_multi(client, model, IDENTITY_BLOCK_PROMPT, text, max_tokens=1024)
+    return [_expand_first_occurrence(text, v) for v in _union_str_field(payloads, "identity_block")]
 
 
 def find_personal_spans(client, text: str, model: str) -> list:
     """Ask Claude for exact name/address/other-ID substrings, for geometric redaction."""
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=SPAN_IDENTIFICATION_PROMPT,
-        messages=[{"role": "user", "content": text}],
-    )
-    raw = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    ).strip()
-    payload = _require_parsed_json(raw, response.stop_reason)
+    payloads = _call_entity_json_multi(client, model, SPAN_IDENTIFICATION_PROMPT, text, max_tokens=4096)
 
     spans = []
     for field, token in (
@@ -608,29 +654,16 @@ def find_personal_spans(client, text: str, model: str) -> list:
         ("addresses", "[REDACTED-ADDRESS]"),
         ("other_ids", "[REDACTED-ID]"),
     ):
-        values = payload.get(field, [])
-        if isinstance(values, list):
-            spans.extend(
-                (_expand_first_occurrence(text, str(v)), token)
-                for v in values
-                if isinstance(v, (str, int, float)) and str(v).strip()
-            )
+        spans.extend(
+            (_expand_first_occurrence(text, v), token) for v in _union_str_field(payloads, field)
+        )
     return spans
 
 
 def find_contract_spans(client, text: str, model: str) -> list:
     """Ask Claude for exact name/address/date/other-ID substrings across ALL parties
     in a contract/letter, for geometric redaction."""
-    response = client.messages.create(
-        model=model,
-        max_tokens=8192,
-        system=CONTRACT_SPAN_PROMPT,
-        messages=[{"role": "user", "content": text}],
-    )
-    raw = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    ).strip()
-    payload = _require_parsed_json(raw, response.stop_reason)
+    payloads = _call_entity_json_multi(client, model, CONTRACT_SPAN_PROMPT, text, max_tokens=8192)
 
     spans = []
     for field, token in (
@@ -640,29 +673,16 @@ def find_contract_spans(client, text: str, model: str) -> list:
         ("other_ids", "[REDACTED-ID]"),
         ("compensation", "[REDACTED-COMPENSATION]"),
     ):
-        values = payload.get(field, [])
-        if isinstance(values, list):
-            spans.extend(
-                (_expand_first_occurrence(text, str(v)), token)
-                for v in values
-                if isinstance(v, (str, int, float)) and str(v).strip()
-            )
+        spans.extend(
+            (_expand_first_occurrence(text, v), token) for v in _union_str_field(payloads, field)
+        )
     return spans
 
 
 def find_level2_spans(client, text: str, model: str) -> list:
     """Ask Claude for name/address/ID/date substrings plus generalization pairs, for
     geometric redaction that keeps Level 2 in the same true-layout pipeline as Level 1."""
-    response = client.messages.create(
-        model=model,
-        max_tokens=16000,
-        system=LEVEL2_SPAN_PROMPT,
-        messages=[{"role": "user", "content": text}],
-    )
-    raw = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    ).strip()
-    payload = _require_parsed_json(raw, response.stop_reason)
+    payloads = _call_entity_json_multi(client, model, LEVEL2_SPAN_PROMPT, text, max_tokens=16000)
 
     spans = []
     for field, token in (
@@ -672,17 +692,11 @@ def find_level2_spans(client, text: str, model: str) -> list:
         ("dates", "[REDACTED-DATE]"),
         ("locations", "[REDACTED-LOCATION]"),
     ):
-        values = payload.get(field, [])
-        if isinstance(values, list):
-            spans.extend(
-                (_expand_first_occurrence(text, str(v)), token)
-                for v in values
-                if isinstance(v, (str, int, float)) and str(v).strip()
-            )
+        spans.extend(
+            (_expand_first_occurrence(text, v), token) for v in _union_str_field(payloads, field)
+        )
 
-    for item in payload.get("generalizations", []):
-        if not isinstance(item, dict):
-            continue
+    for item in _union_dict_list_field(payloads, "generalizations", "original"):
         original = item.get("original")
         replacement = item.get("replacement")
         if (
@@ -693,9 +707,7 @@ def find_level2_spans(client, text: str, model: str) -> list:
         ):
             spans.append((_expand_first_occurrence(text, original), replacement))
 
-    for item in payload.get("education_entries", []):
-        if not isinstance(item, dict):
-            continue
+    for item in _union_dict_list_field(payloads, "education_entries", "institution"):
         institution = item.get("institution")
         date = item.get("date")
         if not (
