@@ -192,6 +192,44 @@ def _apply_header_mode(
     return new_doc
 
 
+def _dedupe_overlapping_labels(page: "fitz.Page") -> None:
+    """Post-hoc safety net: if two [REDACTED-...] labels ended up drawn at (almost)
+    the same spot, keep only the first and clean up the second, rather than leaving
+    both superimposed and unreadable. This can happen because entity-detection now
+    makes several independent calls and unions the results (see
+    _call_entity_json_multi in redactor.py) - if one attempt scopes an entity even
+    slightly differently than another (e.g. catching a person's name at a position
+    that overlaps a separately, correctly-caught address), both labels get drawn
+    since neither individual span's rect was flagged as covering the other ahead of
+    time. Blanking just the "duplicate" rect isn't enough when one rect is fully
+    inside the other (a plain sub-rect blank would erase part of the kept label
+    too), so this blanks the union of both and redraws only the kept label's text
+    into it. Never touches the underlying redaction itself - the region was already
+    blanked before either label was drawn, so this can only ever reduce visual
+    clutter, never expose anything."""
+    words = page.get_text("words")
+    label_words = [w for w in words if w[4].startswith("[") and "REDACT" in w[4].upper()]
+
+    kept = []
+    for w in label_words:
+        rect = fitz.Rect(w[:4])
+        text = w[4]
+        match = None
+        for i, (kept_rect, _) in enumerate(kept):
+            inter = rect & kept_rect
+            smaller_area = min(rect.get_area(), kept_rect.get_area())
+            if not inter.is_empty and smaller_area > 0 and inter.get_area() / smaller_area >= 0.6:
+                match = i
+                break
+        if match is None:
+            kept.append((rect, text))
+        else:
+            kept_rect, kept_text = kept[match]
+            page.add_redact_annot(rect | kept_rect, fill=(0.82, 0.82, 0.82))
+            page.apply_redactions()
+            _draw_fitted_text(page, kept_rect, kept_text)
+
+
 def _redact_and_brand(
     doc: "fitz.Document",
     unique_spans: list,
@@ -248,6 +286,7 @@ def _redact_and_brand(
         page.apply_redactions()
         for rect, replacement in deferred:
             _draw_fitted_text(page, rect, replacement)
+        _dedupe_overlapping_labels(page)
 
     doc = _apply_header_mode(doc, identity_bottom, header_mode)
 
