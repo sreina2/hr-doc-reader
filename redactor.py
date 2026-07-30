@@ -303,8 +303,10 @@ caps, a small line directly under the name, a sidebar block - any layout. Emails
 numbers, and common URL patterns may already be removed from this text; find anything of \
 that kind that remains, plus the name itself, wherever and however it appears.
 
-Do not flag: other people's names mentioned elsewhere in the document (managers, \
-co-authors, references), company names, job titles, or any other content.
+Do not flag: home/mailing addresses (these are found and redacted separately, under their \
+own [REDACTED-ADDRESS] label, not this one), other people's names mentioned elsewhere in \
+the document (managers, co-authors, references), company names, job titles, or any other \
+content.
 
 Return ONLY a JSON object with this exact shape, no other text, no markdown fences:
 {"identity_block": ["exact substring", "exact substring"]}
@@ -442,13 +444,14 @@ def redact_resume(
 def redact_contract(
     client, text: str, model: str, level: ContractLevel
 ) -> tuple[list, RedactionCounts]:
+    # No find_identity_block pre-pass here, unlike redact_resume - that prompt is
+    # written for a resume's own name/contact header block and (confirmed via
+    # testing) can misidentify a party's address as part of it on a contract,
+    # producing a second, conflicting redaction over the same text. The contract
+    # prompts below already redact every name - including signature blocks - with
+    # no exceptions on their own, so this safety net is both redundant and risky
+    # here.
     pre_redacted = _apply_regex_redactions(text)
-
-    identity_spans = find_identity_block(client, pre_redacted, model)
-    replacement = "" if level == ContractLevel.SUMMARIZED_TAKEAWAYS else "[REDACTED-NAME]"
-    for span in sorted(set(identity_spans), key=len, reverse=True):
-        if span.strip():
-            pre_redacted = pre_redacted.replace(span, replacement)
 
     sections = _generate_structured_redaction(
         client, pre_redacted, model, CONTRACT_LEVEL_PROMPTS[level]

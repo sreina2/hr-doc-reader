@@ -40,6 +40,23 @@ TOKEN_TO_FIELD = {
 }
 
 
+def _drop_nested_spans(spans: list) -> list:
+    """Remove any span whose text is fully contained within a longer span already
+    kept - e.g. a bare last name ("Chen") that's also part of a longer name already
+    flagged ("Mr. Chen"), or a unit number ("Apt 4B") that's also part of a full
+    address already flagged. Without this, both get redacted independently via
+    page.search_for(), producing two overlapping redact_annots at (almost) the same
+    spot and a garbled, doubled-up render - this keeps only the longer, outer span,
+    which already covers the same page region."""
+    ordered = sorted(set(spans), key=lambda s: len(s[0]), reverse=True)
+    kept = []
+    for text, replacement in ordered:
+        if any(text in kept_text for kept_text, _ in kept):
+            continue
+        kept.append((text, replacement))
+    return kept
+
+
 def _group_wrapped_rects(rects: list) -> list:
     """Group rects that are vertically adjacent (consecutive wrapped lines of the same
     logical match) so a single occurrence doesn't get its replacement text repeated once
@@ -190,14 +207,12 @@ def _redact_and_brand(
             if not rects:
                 continue
             field = TOKEN_TO_FIELD.get(replacement, "other")
-            is_free_text = not (replacement.startswith("[REDACTED-") and replacement.endswith("]"))
             for group in _group_wrapped_rects(rects):
                 combined = group[0]
                 for r in group[1:]:
                     combined |= r
                 fits_inline = (
-                    not is_free_text
-                    or fitz.get_text_length(replacement, fontname="helv", fontsize=8)
+                    fitz.get_text_length(replacement, fontname="helv", fontsize=8)
                     <= combined.width
                 )
                 if fits_inline:
@@ -249,7 +264,7 @@ def redact_pdf_in_place(
     identity_block_texts = find_identity_block(client, pre_redacted, model)
     identity_spans = [(s, "[REDACTED-NAME]") for s in identity_block_texts]
     spans = find_regex_spans(full_text) + entity_spans + identity_spans
-    unique_spans = sorted(set(spans), key=lambda s: len(s[0]), reverse=True)
+    unique_spans = _drop_nested_spans(spans)
 
     return _redact_and_brand(doc, unique_spans, identity_block_texts, header_mode)
 
@@ -261,15 +276,21 @@ def redact_contract_pdf_in_place(
     contact info, reference numbers, compensation figures) directly on the original
     contract/letter pages, preserving the rest of the document's layout exactly.
     header_mode controls the fixed official Maven header image's placement.
+
+    No find_identity_block pre-pass here, unlike redact_pdf_in_place - that prompt is
+    written for a resume's own name/contact header block and (confirmed via testing)
+    can misidentify a party's address as part of it on a contract, producing a
+    second, conflicting redact_annot over the same page region as the correctly
+    found [REDACTED-ADDRESS] span. find_contract_spans already redacts every name -
+    including signature blocks - with no exceptions on its own, so this safety net
+    is both redundant and risky here.
     Returns (redacted_pdf_bytes, RedactionCounts, redacted_text, page_preview_pngs)."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     full_text = "\n".join(page.get_text() for page in doc)
     pre_redacted = _apply_regex_redactions(full_text)
 
     entity_spans = find_contract_spans(client, pre_redacted, model)
-    identity_block_texts = find_identity_block(client, pre_redacted, model)
-    identity_spans = [(s, "[REDACTED-NAME]") for s in identity_block_texts]
-    spans = find_regex_spans(full_text) + entity_spans + identity_spans
-    unique_spans = sorted(set(spans), key=lambda s: len(s[0]), reverse=True)
+    spans = find_regex_spans(full_text) + entity_spans
+    unique_spans = _drop_nested_spans(spans)
 
-    return _redact_and_brand(doc, unique_spans, identity_block_texts, header_mode)
+    return _redact_and_brand(doc, unique_spans, [], header_mode)
